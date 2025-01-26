@@ -1,18 +1,36 @@
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel
 import sys
 from PIL import Image
-from PIL.ExifTags import TAGS
+from pillow_heif import register_heif_opener
+import piexif
+import io
 import os
 import time
 import datetime
 import subprocess
 
+# Register HEIF opener with Pillow
+register_heif_opener()
+
 def get_date_taken(path):
     try:
-        return Image.open(path)._getexif()[36867]
+        image = Image.open(path)
+        exif_data = image._getexif()
+        if exif_data and 36867 in exif_data:
+            return exif_data[36867]
     except Exception as e:
         print(f"Error reading date taken from {path}: {e}")
-        return None
+    return None
+
+def get_heic_date_taken(path):
+    try:
+        heif_image = Image.open(path)
+        exif_dict = piexif.load(heif_image.info['exif'])
+        if "Exif" in exif_dict and 36867 in exif_dict["Exif"]:
+            return exif_dict["Exif"][36867].decode("utf-8")
+    except Exception as e:
+        print(f"Error reading date taken from {path}: {e}")
+    return None
 
 def get_video_date_created(path, ffprobe_path):
     try:
@@ -26,19 +44,21 @@ def get_video_date_created(path, ffprobe_path):
             except ValueError:
                 continue
         print(f"Date format not recognized for {path}: {date_created}")
-        return None
     except Exception as e:
         print(f"Error reading media created date from {path}: {e}")
-        return None
+    return None
 
 def modify_file_date(image_path, date_taken):
     if date_taken:
-        date_struct = time.strptime(date_taken, '%Y:%m:%d %H:%M:%S')
-        timestamp = time.mktime(date_struct)
-        os.utime(image_path, (timestamp, timestamp))
-        print(f"Updated {image_path} with media created date: {date_taken}")
+        try:
+            date_struct = time.strptime(date_taken, '%Y:%m:%d %H:%M:%S')
+            timestamp = time.mktime(date_struct)
+            os.utime(image_path, (timestamp, timestamp))
+            print(f"Updated {image_path} with date taken: {date_taken}")
+        except Exception as e:
+            print(f"Error modifying file date for {image_path}: {e}")
     else:
-        print(f"Skipping {image_path} due to missing media created date.")
+        print(f"Skipping {image_path} due to missing date taken.")
 
 def process_directory(directory, ffprobe_path):
     for root, dirs, files in os.walk(directory):
@@ -47,6 +67,10 @@ def process_directory(directory, ffprobe_path):
                 image_path = os.path.join(root, filename)
                 date_taken = get_date_taken(image_path)
                 modify_file_date(image_path, date_taken)
+            elif filename.lower().endswith('.heic'):
+                heic_path = os.path.join(root, filename)
+                date_taken = get_heic_date_taken(heic_path)
+                modify_file_date(heic_path, date_taken)
             elif filename.lower().endswith('.mp4'):
                 video_path = os.path.join(root, filename)
                 date_created = get_video_date_created(video_path, ffprobe_path)
